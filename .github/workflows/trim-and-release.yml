@@ -1,0 +1,86 @@
+name: trim-and-release
+
+on:
+  schedule:
+    # every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  trim-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: get latest loyalsoldier release
+        id: upstream
+        run: |
+          RESPONSE=$(curl -s https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest)
+          RELEASE_TAG=$(echo "$RESPONSE" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+          RELEASE_DATETIME=$(echo "$RESPONSE" | grep '"published_at"' | head -1 | cut -d'"' -f4)
+          RELEASE_DATE=$(echo "$RELEASE_DATETIME" | cut -d'T' -f1)
+          RELEASE_TIME=$(echo "$RELEASE_DATETIME" | cut -d'T' -f2 | cut -d'Z' -f1)
+          
+          echo "tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT
+          echo "date=${RELEASE_DATE}" >> $GITHUB_OUTPUT
+          echo "datetime=${RELEASE_DATE}T${RELEASE_TIME}" >> $GITHUB_OUTPUT
+      
+      - name: check if release already exists
+        id: check
+        run: |
+          if git rev-parse "v${{ steps.upstream.outputs.date }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: setup go
+        if: steps.check.outputs.exists == 'false'
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.24'
+      
+      - name: build geotrim
+        if: steps.check.outputs.exists == 'false'
+        run: go build -o geotrim
+      
+      - name: download upstream files
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          mkdir -p temp
+          curl -L -o temp/geoip.dat \
+            https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
+          curl -L -o temp/geosite.dat \
+            https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat
+      
+      - name: trim files
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          mkdir -p trimmed-output
+          ./geotrim trim -input temp/geoip.dat -type geoip -output geoip.dat -outdir trimmed-output
+          ./geotrim trim -input temp/geosite.dat -type geosite -output geosite.dat -outdir trimmed-output
+      
+      - name: create release
+        if: steps.check.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.upstream.outputs.date }}
+          name: ${{ steps.upstream.outputs.datetime }}
+          body: |
+            Trimmed v2ray-rules-dat release from Loyalsoldier.
+            
+            Original: https://github.com/Loyalsoldier/v2ray-rules-dat/releases/tag/${{ steps.upstream.outputs.tag }}
+          files: |
+            trimmed-output/geoip.dat
+            trimmed-output/geosite.dat
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
