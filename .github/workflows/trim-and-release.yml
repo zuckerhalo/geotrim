@@ -96,12 +96,12 @@ jobs:
           echo "$GEOIP_OUTPUT"
           echo "$GEOSITE_OUTPUT"
           
-          GEOIP_ORIGINAL=$(echo "$GEOIP_OUTPUT" | grep "original:" | sed 's/.*original: \([^,]*\), trimmed:.*/\1/')
-          GEOIP_TRIMMED=$(echo "$GEOIP_OUTPUT" | grep "original:" | sed 's/.*trimmed: \([^ ]*\).*/\1/')
+          GEOIP_ORIGINAL=$(echo "$GEOIP_OUTPUT" | grep "original:" | sed 's/.*original: \([^,]*\), trimmed:.*/\1/' | xargs)
+          GEOIP_TRIMMED=$(echo "$GEOIP_OUTPUT" | grep "original:" | sed 's/.*trimmed: \(.*\)/\1/' | xargs)
           GEOIP_CATEGORIES=$(echo "$GEOIP_OUTPUT" | grep "kept" | sed 's/.*kept \([0-9]*\) categories.*/\1/')
           
-          GEOSITE_ORIGINAL=$(echo "$GEOSITE_OUTPUT" | grep "original:" | sed 's/.*original: \([^,]*\), trimmed:.*/\1/')
-          GEOSITE_TRIMMED=$(echo "$GEOSITE_OUTPUT" | grep "original:" | sed 's/.*trimmed: \([^ ]*\).*/\1/')
+          GEOSITE_ORIGINAL=$(echo "$GEOSITE_OUTPUT" | grep "original:" | sed 's/.*original: \([^,]*\), trimmed:.*/\1/' | xargs)
+          GEOSITE_TRIMMED=$(echo "$GEOSITE_OUTPUT" | grep "original:" | sed 's/.*trimmed: \(.*\)/\1/' | xargs)
           GEOSITE_CATEGORIES=$(echo "$GEOSITE_OUTPUT" | grep "kept" | sed 's/.*kept \([0-9]*\) categories.*/\1/')
           
           echo "geoip_original=${GEOIP_ORIGINAL}" >> $GITHUB_OUTPUT
