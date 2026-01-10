@@ -2,4 +2,4 @@ module github.com/zuckerhalo/geotrim
 
 go 1.24.0
 
-require google.golang.org/protobuf v1.36.11
+require github.com/dustin/go-humanize v1.0.1

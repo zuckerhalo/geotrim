@@ -2,7 +2,7 @@ name: trim-and-release
 
 on:
   schedule:
-    # everyday at 22:20 utc 4 minutes after loyalsoldier's 
+    # everyday at 22:20 utc
     - cron: '20 22 * * *'
   workflow_dispatch:
 
@@ -14,73 +14,131 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: checkout
+      - name: Checking out repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
       
-      - name: get latest loyalsoldier release
+      - name: Setting up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.0'
+          cache-dependency-path: go.sum
+      
+      - name: Getting latest upstream release
         id: upstream
         run: |
+          set -e
           RESPONSE=$(curl -s https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest)
-          RELEASE_TAG=$(echo "$RESPONSE" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-          RELEASE_DATETIME=$(echo "$RESPONSE" | grep '"published_at"' | head -1 | cut -d'"' -f4)
+          RELEASE_TAG=$(echo "$RESPONSE" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+          RELEASE_DATETIME=$(echo "$RESPONSE" | grep '"published_at"' | head -1 | sed 's/.*"published_at": *"\([^"]*\)".*/\1/')
           RELEASE_DATE=$(echo "$RELEASE_DATETIME" | cut -d'T' -f1)
           RELEASE_TIME=$(echo "$RELEASE_DATETIME" | cut -d'T' -f2 | cut -d'Z' -f1)
+          
+          if [ -z "$RELEASE_TAG" ] || [ -z "$RELEASE_DATE" ]; then
+            echo "Error: Failed to parse release information"
+            exit 1
+          fi
           
           echo "tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT
           echo "date=${RELEASE_DATE}" >> $GITHUB_OUTPUT
           echo "datetime=${RELEASE_DATE}T${RELEASE_TIME}" >> $GITHUB_OUTPUT
       
-      - name: check if release already exists
+      - name: Checking if release already exists
         id: check
         run: |
           if git rev-parse "v${{ steps.upstream.outputs.date }}" >/dev/null 2>&1; then
             echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Release v${{ steps.upstream.outputs.date }} already exists."
           else
             echo "exists=false" >> $GITHUB_OUTPUT
+            echo "New release found: v${{ steps.upstream.outputs.date }}"
           fi
       
-      - name: setup go
-        if: steps.check.outputs.exists == 'false'
-        uses: actions/setup-go@v4
-        with:
-          go-version: '1.24'
-      
-      - name: build geotrim
-        if: steps.check.outputs.exists == 'false'
-        run: go build -o geotrim
-      
-      - name: download upstream files
+      - name: Building geotrim
         if: steps.check.outputs.exists == 'false'
         run: |
+          set -e
+          go build -o geotrim
+          if [ ! -f geotrim ]; then
+            echo "Error: binary not found"
+            exit 1
+          fi
+          echo "Build successful"
+      
+      - name: Downloading upstream files
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          set -e
           mkdir -p temp
-          curl -L -o temp/geoip.dat \
+          curl -Lf -o temp/geoip.dat \
             https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
-          curl -L -o temp/geosite.dat \
+          curl -Lf -o temp/geosite.dat \
             https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat
+          
+          ls -lh temp/
+          
+          if [ ! -f temp/geoip.dat ] || [ ! -f temp/geosite.dat ]; then
+            echo "Error: Failed to download upstream files"
+            exit 1
+          fi
       
-      - name: trim files
+      - name: Trimming files
+        id: trim
         if: steps.check.outputs.exists == 'false'
         run: |
-          mkdir -p trimmed-output
-          ./geotrim trim -input temp/geoip.dat -type geoip -output geoip.dat -outdir trimmed-output
-          ./geotrim trim -input temp/geosite.dat -type geosite -output geosite.dat -outdir trimmed-output
+          set -e
+          mkdir -p output
+          
+          GEOIP_OUTPUT=$(./geotrim -i temp/geoip.dat -t geoip -o geoip.dat -od output 2>&1)
+          GEOSITE_OUTPUT=$(./geotrim -i temp/geosite.dat -t geosite -o geosite.dat -od output 2>&1)
+          
+          echo "$GEOIP_OUTPUT"
+          echo "$GEOSITE_OUTPUT"
+          
+          GEOIP_ORIGINAL=$(echo "$GEOIP_OUTPUT" | grep "original:" | sed 's/.*original: \([^,]*\), trimmed:.*/\1/')
+          GEOIP_TRIMMED=$(echo "$GEOIP_OUTPUT" | grep "original:" | sed 's/.*trimmed: \([^ ]*\).*/\1/')
+          GEOIP_CATEGORIES=$(echo "$GEOIP_OUTPUT" | grep "kept" | sed 's/.*kept \([0-9]*\) categories.*/\1/')
+          
+          GEOSITE_ORIGINAL=$(echo "$GEOSITE_OUTPUT" | grep "original:" | sed 's/.*original: \([^,]*\), trimmed:.*/\1/')
+          GEOSITE_TRIMMED=$(echo "$GEOSITE_OUTPUT" | grep "original:" | sed 's/.*trimmed: \([^ ]*\).*/\1/')
+          GEOSITE_CATEGORIES=$(echo "$GEOSITE_OUTPUT" | grep "kept" | sed 's/.*kept \([0-9]*\) categories.*/\1/')
+          
+          echo "geoip_original=${GEOIP_ORIGINAL}" >> $GITHUB_OUTPUT
+          echo "geoip_trimmed=${GEOIP_TRIMMED}" >> $GITHUB_OUTPUT
+          echo "geoip_categories=${GEOIP_CATEGORIES}" >> $GITHUB_OUTPUT
+          echo "geosite_original=${GEOSITE_ORIGINAL}" >> $GITHUB_OUTPUT
+          echo "geosite_trimmed=${GEOSITE_TRIMMED}" >> $GITHUB_OUTPUT
+          echo "geosite_categories=${GEOSITE_CATEGORIES}" >> $GITHUB_OUTPUT
+          
+          ls -lh output/
+          
+          if [ ! -f output/geoip.dat ] || [ ! -f output/geosite.dat ]; then
+            echo "Error: Failed to create files"
+            exit 1
+          fi
       
-      - name: create release
+      - name: Creating release
         if: steps.check.outputs.exists == 'false'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.upstream.outputs.date }}
           name: ${{ steps.upstream.outputs.datetime }}
           body: |
-            Trimmed v2ray-rules-dat release from Loyalsoldier.
+            Trimmed Loyalsoldier's .dat files with no entries and only the categories left.
+
+            ### GeoIP
+            ${{ steps.trim.outputs.geoip_original }} → ${{ steps.trim.outputs.geoip_trimmed }}
+            ${{ steps.trim.outputs.geoip_categories }} categories kept
+
+            ### GeoSite
+            ${{ steps.trim.outputs.geosite_original }} → ${{ steps.trim.outputs.geosite_trimmed }}
+            ${{ steps.trim.outputs.geosite_categories }} categories kept
+
+            **Original Release:** [${{ steps.upstream.outputs.tag }}](https://github.com/Loyalsoldier/v2ray-rules-dat/releases/tag/${{ steps.upstream.outputs.tag }})
             
-            Original: https://github.com/Loyalsoldier/v2ray-rules-dat/releases/tag/${{ steps.upstream.outputs.tag }}
           files: |
-            trimmed-output/geoip.dat
-            trimmed-output/geosite.dat
+            output/geoip.dat
+            output/geosite.dat
           draft: false
           prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
